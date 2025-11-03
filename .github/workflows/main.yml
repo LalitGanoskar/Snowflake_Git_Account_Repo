@@ -3,87 +3,78 @@ name: Move Data from Account_Raw to Omega
 on:
   schedule:
     - cron: "*/2 * * * *"   # every 2 minutes
-  workflow_dispatch:        # allow manual runs too
+  workflow_dispatch:
 
 jobs:
-  move-data:
+  run-sql:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-
+    timeout-minutes: 15
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Install basic packages
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install node deps
+        run: npm install jsonwebtoken node-fetch@2
+
+      - name: Decode private key
         run: |
-          sudo apt-get update -y
-          sudo apt-get install -y wget bzip2 ca-certificates
+          echo "${{ secrets.SNOW_PRIVATE_KEY_BASE64 }}" | base64 --decode > ./rsa_key.p8
+          chmod 600 ./rsa_key.p8
 
-      - name: Download & install SnowSQL (verbose + capture logs)
-        id: install_snowsql
+      - name: Read SQL file (test)
         run: |
-          set -euo pipefail
-          mkdir -p snowsql_install
-          SNOWSQL_VERSION="1.2.31"
-          SNOWSQL_BASH="snowsql-${SNOWSQL_VERSION}-linux_x86_64.bash"
-          SNOWSQL_URL="https://sfc-repo.snowflakecomputing.com/snowsql/bootstrap/1.2/linux_x86_64/${SNOWSQL_BASH}"
+          SQL_CONTENT="$(sed 's/\\/\\\\/g; s/\"/\\\"/g' sql/test.sql | tr '\n' ' ' )"
+          printf '%s' "$SQL_CONTENT" > sql_encoded.txt
+          echo "sqllen=$(wc -c < sql_encoded.txt)" >> $GITHUB_OUTPUT
 
-          echo "Downloading ${SNOWSQL_URL}"
-          wget -q -O "$SNOWSQL_BASH" "$SNOWSQL_URL" || { echo "wget failed (exit $?)"; exit 2; }
-
-          chmod +x "$SNOWSQL_BASH" || { echo "chmod failed"; exit 3; }
-
-          # Installer verbose log file
-          INSTALL_LOG="$(pwd)/snowsql_install/install.log"
-          echo "Installer log -> $INSTALL_LOG"
-          echo "Installer environment:"
-          uname -a
-          lsb_release -a || true
-          env | sort
-
-          echo "Running installer..."
-          export SNOWSQL_DOWNLOAD_DIR="$(pwd)/snowsql_install"
-          echo "SNOWSQL_DOWNLOAD_DIR=$SNOWSQL_DOWNLOAD_DIR" >> "$INSTALL_LOG"
-
-          ( set -x; ./"$SNOWSQL_BASH" -b -v ) > >(tee -a "$INSTALL_LOG") 2> >(tee -a "$INSTALL_LOG" >&2) || {
-            echo "Installer exited with code $? - see $INSTALL_LOG for details"
-            echo "==== INSTALL LOG START ===="
-            sed -n '1,400p' "$INSTALL_LOG" || true
-            echo "==== INSTALL LOG END ===="
-            exit 4
-          }
-
-          echo "Installer finished. Showing installed files:"
-          ls -la snowsql_install || true
-          echo "Show snowsql version (if present):"
-          if [ -x ./snowsql_install/snowsql ]; then
-            ./snowsql_install/snowsql -v || true
-          else
-            echo "snowsql binary not found in snowsql_install"
-            echo "Install dir listing:"
-            ls -la snowsql_install || true
-            exit 5
-          fi
-
-      - name: Show SQL file (debug)
-        run: |
-          echo "Listing repo files:"
-          ls -la
-          echo "First 200 lines of SQL file:"
-          sed -n '1,200p' sql/move_data.sql || true
-
-      - name: Run SQL file with snowsql
+      - name: Generate JWT and call Snowflake SQL API
         env:
           SNOW_ACCOUNT: ${{ secrets.SNOW_ACCOUNT }}
           SNOW_USER: ${{ secrets.SNOW_USER }}
-          SNOW_PWD: ${{ secrets.SNOW_PWD }}
-          SNOW_WAREHOUSE: ${{ secrets.SNOW_WAREHOUSE }}
           SNOW_DATABASE: ${{ secrets.SNOW_DATABASE }}
           SNOW_SCHEMA: ${{ secrets.SNOW_SCHEMA }}
-          SQL_FILE: "sql/move_data.sql"
+          SNOW_WAREHOUSE: ${{ secrets.SNOW_WAREHOUSE }}
         run: |
-          set -e
-          echo "Executing SQL file via snowsql..."
-          ./snowsql_install/snowsql -a "$SNOW_ACCOUNT" -u "$SNOW_USER" -p "$SNOW_PWD" \
-            -w "$SNOW_WAREHOUSE" -d "$SNOW_DATABASE" -s "$SNOW_SCHEMA" \
-            -f "$SQL_FILE"
+          node -e "
+const fs = require('fs');
+const jwt = require('jsonwebtoken');
+const fetch = require('node-fetch');
+
+const account = process.env.SNOW_ACCOUNT;
+const user = process.env.SNOW_USER;
+const now = Math.floor(Date.now()/1000);
+const payload = { iss: account, sub: user, iat: now, exp: now + 60, aud: 'https://'+account+'.snowflakecomputing.com' };
+const key = fs.readFileSync('./rsa_key.p8', 'utf8');
+const token = jwt.sign(payload, key, { algorithm: 'RS256' });
+const sql = fs.readFileSync('./sql_encoded.txt','utf8');
+const url = `https://${account}.snowflakecomputing.com/api/v2/statements/`;
+const body = { statement: sql, database: process.env.SNOW_DATABASE, schema: process.env.SNOW_SCHEMA, warehouse: process.env.SNOW_WAREHOUSE, timeout: 0 };
+
+(async () => {
+  console.log('Submitting SQL...');
+  const r = await fetch(url, { method:'POST', headers:{ 'Authorization':'Bearer '+token, 'Content-Type':'application/json' }, body: JSON.stringify(body) });
+  const j = await r.json();
+  console.log('POST status', r.status);
+  console.log(JSON.stringify(j,null,2));
+  if(!j.id){ console.error('No id returned'); process.exit(2); }
+  const id = j.id;
+  const statusUrl = url + id;
+  for(let i=0;i<30;i++){
+    await new Promise(r=>setTimeout(r,1000));
+    const s = await fetch(statusUrl, { headers: { 'Authorization':'Bearer '+token }});
+    const sj = await s.json();
+    console.log('Poll',i,'status', s.status);
+    console.log(JSON.stringify(sj,null,2));
+    if(sj.status && (sj.status.state==='SUCCESS' || sj.status.state==='FAILED')){
+       if(sj.status.state==='SUCCESS'){ console.log('SUCCESS'); process.exit(0); } else { console.error('FAILED'); process.exit(3); }
+    }
+  }
+  console.error('Timeout waiting for statement');
+  process.exit(4);
+})();
+"
