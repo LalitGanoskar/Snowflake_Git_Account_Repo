@@ -19,32 +19,57 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install -y wget bzip2 ca-certificates
 
-      - name: Download & install SnowSQL (versioned installer, local install)
+           - name: Download & install SnowSQL (verbose + capture logs)
         id: install_snowsql
         run: |
-          set -e
+          set -euo pipefail
           mkdir -p snowsql_install
-          # Version to install (change if you want a different version)
           SNOWSQL_VERSION="1.2.31"
           SNOWSQL_BASH="snowsql-${SNOWSQL_VERSION}-linux_x86_64.bash"
-          # AWS repo path (stable)
           SNOWSQL_URL="https://sfc-repo.snowflakecomputing.com/snowsql/bootstrap/1.2/linux_x86_64/${SNOWSQL_BASH}"
+
           echo "Downloading ${SNOWSQL_URL}"
-          wget -q -O "$SNOWSQL_BASH" "$SNOWSQL_URL"
+          wget -q -O "$SNOWSQL_BASH" "$SNOWSQL_URL" || { echo "wget failed (exit $?)"; exit 2; }
 
-          # Ensure the installer is executable
-          chmod +x "$SNOWSQL_BASH"
+          chmod +x "$SNOWSQL_BASH" || { echo "chmod failed"; exit 3; }
 
-          # Install into a local, writable directory (avoid modifying /bin or system files)
+          # Installer verbose log file
+          INSTALL_LOG="$(pwd)/snowsql_install/install.log"
+          echo "Installer log -> $INSTALL_LOG"
+          echo "Installer environment:"
+          uname -a
+          lsb_release -a || true
+          env | sort
+
+          # Run the installer in verbose mode and capture both stdout and stderr
+          # The -b switch does a batch install; -v for verbose if supported.
+          # Redirect stdout+stderr to log file so we can inspect
+          echo "Running installer..."
+          # run the installer, allow installer to write into current directory (snowsql_install)
+          # use SNOWSQL_DOWNLOAD_DIR to prefer local installation
           export SNOWSQL_DOWNLOAD_DIR="$(pwd)/snowsql_install"
-          echo "Installing to $SNOWSQL_DOWNLOAD_DIR"
-          # Run installer in batch mode so it won't prompt; installer will put files into SNOWSQL_DOWNLOAD_DIR
-          ./"$SNOWSQL_BASH" -b
+          echo "SNOWSQL_DOWNLOAD_DIR=$SNOWSQL_DOWNLOAD_DIR" >> "$INSTALL_LOG"
+          # run installer and capture full output
+          ( set -x; ./"$SNOWSQL_BASH" -b -v ) > >(tee -a "$INSTALL_LOG") 2> >(tee -a "$INSTALL_LOG" >&2) || {
+            echo "Installer exited with code $? - see $INSTALL_LOG for details"
+            echo "==== INSTALL LOG START ===="
+            sed -n '1,400p' "$INSTALL_LOG" || true
+            echo "==== INSTALL LOG END ===="
+            exit 4
+          }
 
-          # Check installed binary
-          echo "Installed files:"
-          ls -la snowsql_install
-          ./snowsql_install/snowsql -v || true
+          echo "Installer finished. Showing installed files:"
+          ls -la snowsql_install || true
+          echo "Show snowsql version (if present):"
+          if [ -x ./snowsql_install/snowsql ]; then
+            ./snowsql_install/snowsql -v || true
+          else
+            echo "snowsql binary not found in snowsql_install"
+            echo "Install dir listing:"
+            ls -la snowsql_install || true
+            exit 5
+          fi
+
 
       - name: Show SQL file (debug)
         run: |
