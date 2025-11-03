@@ -19,21 +19,30 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install -y wget bzip2 ca-certificates
 
-      - name: Download & install SnowSQL (versioned installer)
+      - name: Download & install SnowSQL (versioned installer, local install)
         id: install_snowsql
         run: |
           set -e
           mkdir -p snowsql_install
-          # Use a specific SnowSQL installer - avoids 404 from generic "bundle" URL
+          # Version to install (change if you want a different version)
           SNOWSQL_VERSION="1.2.31"
           SNOWSQL_BASH="snowsql-${SNOWSQL_VERSION}-linux_x86_64.bash"
+          # AWS repo path (stable)
           SNOWSQL_URL="https://sfc-repo.snowflakecomputing.com/snowsql/bootstrap/1.2/linux_x86_64/${SNOWSQL_BASH}"
           echo "Downloading ${SNOWSQL_URL}"
           wget -q -O "$SNOWSQL_BASH" "$SNOWSQL_URL"
+
+          # Ensure the installer is executable
           chmod +x "$SNOWSQL_BASH"
-          # Install into local folder so it doesn't require root:
-          SNOWSQL_DEST="$(pwd)/snowsql_install" SNOWSQL_LOGIN_SHELL="/bin/bash" bash "$SNOWSQL_BASH" -b
-          # show installed binary
+
+          # Install into a local, writable directory (avoid modifying /bin or system files)
+          export SNOWSQL_DOWNLOAD_DIR="$(pwd)/snowsql_install"
+          echo "Installing to $SNOWSQL_DOWNLOAD_DIR"
+          # Run installer in batch mode so it won't prompt; installer will put files into SNOWSQL_DOWNLOAD_DIR
+          ./"$SNOWSQL_BASH" -b
+
+          # Check installed binary
+          echo "Installed files:"
           ls -la snowsql_install
           ./snowsql_install/snowsql -v || true
 
