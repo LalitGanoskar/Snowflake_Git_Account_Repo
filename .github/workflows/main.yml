@@ -29,7 +29,7 @@ jobs:
 
       - name: Read SQL file (test)
         run: |
-          SQL_CONTENT="$(tr '\n' ' ' < sql/test.sql)"
+          SQL_CONTENT="$(tr '\n' ' ' < sql/Move_data.sql)"
           echo "$SQL_CONTENT" > sql_encoded.txt
 
       - name: Generate JWT and call Snowflake SQL API
