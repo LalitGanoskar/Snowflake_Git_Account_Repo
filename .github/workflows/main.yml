@@ -27,9 +27,9 @@ jobs:
           echo "${{ secrets.SNOW_PRIVATE_KEY_BASE64 }}" | base64 --decode > ./rsa_key.p8
           chmod 600 ./rsa_key.p8
 
-      - name: Read SQL file (Move_data)
+      - name: Read SQL file (move_data)
         run: |
-          SQL_CONTENT="$(tr '\n' ' ' < sql/Move_data.sql)"
+          SQL_CONTENT="$(tr '\n' ' ' < sql/move_data.sql)"
           echo "$SQL_CONTENT" > sql_encoded.txt
 
       - name: Generate JWT and call Snowflake SQL API
