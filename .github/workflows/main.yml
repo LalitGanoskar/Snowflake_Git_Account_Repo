@@ -2,31 +2,47 @@ name: Move Data from Account_Raw to Omega
 
 on:
   schedule:
-    - cron: "*/2 * * * *"   # Runs every 2 minutes
-  workflow_dispatch:        # Allows manual run as well
+    - cron: "*/2 * * * *"   # every 2 minutes
+  workflow_dispatch:        # allow manual runs too
 
 jobs:
   move-data:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: Install basic packages
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y unzip wget
+          sudo apt-get install -y wget bzip2 ca-certificates
 
-      - name: Download & install SnowSQL (Linux)
+      - name: Download & install SnowSQL (versioned installer)
         id: install_snowsql
         run: |
           set -e
           mkdir -p snowsql_install
-          wget -O snowsql-linux.zip "https://sfc-repo.snowflakecomputing.com/snowsql/bootstrap/py3/bundle/snowsql-linux_x86_64.zip"
-          unzip -q snowsql-linux.zip -d snowsql_install
+          # Use a specific SnowSQL installer - avoids 404 from generic "bundle" URL
+          SNOWSQL_VERSION="1.2.31"
+          SNOWSQL_BASH="snowsql-${SNOWSQL_VERSION}-linux_x86_64.bash"
+          SNOWSQL_URL="https://sfc-repo.snowflakecomputing.com/snowsql/bootstrap/1.2/linux_x86_64/${SNOWSQL_BASH}"
+          echo "Downloading ${SNOWSQL_URL}"
+          wget -q -O "$SNOWSQL_BASH" "$SNOWSQL_URL"
+          chmod +x "$SNOWSQL_BASH"
+          # Install into local folder so it doesn't require root:
+          SNOWSQL_DEST="$(pwd)/snowsql_install" SNOWSQL_LOGIN_SHELL="/bin/bash" bash "$SNOWSQL_BASH" -b
+          # show installed binary
+          ls -la snowsql_install
           ./snowsql_install/snowsql -v || true
+
+      - name: Show SQL file (debug)
+        run: |
+          echo "Listing repo files:"
+          ls -la
+          echo "First 200 lines of SQL file:"
+          sed -n '1,200p' sql/move_data.sql || true
 
       - name: Run SQL file with snowsql
         env:
@@ -39,12 +55,8 @@ jobs:
           SQL_FILE: "sql/move_data.sql"
         run: |
           set -e
-          echo "Listing repo files:"
-          ls -la
-          echo "Showing SQL file (first 200 lines):"
-          sed -n '1,200p' "$SQL_FILE" || true
-
-          echo "Executing SQL via snowsql..."
+          echo "Executing SQL file via snowsql..."
+          # execute the SQL file using the just-installed snowsql
           ./snowsql_install/snowsql -a "$SNOW_ACCOUNT" -u "$SNOW_USER" -p "$SNOW_PWD" \
             -w "$SNOW_WAREHOUSE" -d "$SNOW_DATABASE" -s "$SNOW_SCHEMA" \
             -f "$SQL_FILE"
