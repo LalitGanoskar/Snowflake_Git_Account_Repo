@@ -27,47 +27,6 @@ jobs:
           echo "${{ secrets.SNOW_PRIVATE_KEY_BASE64 }}" | base64 --decode > ./rsa_key.p8
           chmod 600 ./rsa_key.p8
 
-      # 👇👇👇 ADD THIS BLOCK RIGHT HERE 👇👇👇
-      - name: Debug secrets presence (temporary)
-        run: |
-          echo "----- DEBUG: secrets presence -----"
-          if [ -z "${{ secrets.SNOW_ACCOUNT }}" ]; then
-            echo "SNOW_ACCOUNT = MISSING"
-          else
-            echo "SNOW_ACCOUNT = PRESENT (len=$(echo -n \"${{ secrets.SNOW_ACCOUNT }}\" | wc -c))"
-          fi
-
-          if [ -z "${{ secrets.SNOW_USER }}" ]; then
-            echo "SNOW_USER = MISSING"
-          else
-            echo "SNOW_USER = PRESENT (len=$(echo -n \"${{ secrets.SNOW_USER }}\" | wc -c))"
-          fi
-
-          if [ -z "${{ secrets.SNOW_DATABASE }}" ]; then
-            echo "SNOW_DATABASE = MISSING"
-          else
-            echo "SNOW_DATABASE = PRESENT (len=$(echo -n \"${{ secrets.SNOW_DATABASE }}\" | wc -c))"
-          fi
-
-          if [ -z "${{ secrets.SNOW_SCHEMA }}" ]; then
-            echo "SNOW_SCHEMA = MISSING"
-          else
-            echo "SNOW_SCHEMA = PRESENT (len=$(echo -n \"${{ secrets.SNOW_SCHEMA }}\" | wc -c))"
-          fi
-
-          if [ -z "${{ secrets.SNOW_WAREHOUSE }}" ]; then
-            echo "SNOW_WAREHOUSE = MISSING"
-          else
-            echo "SNOW_WAREHOUSE = PRESENT (len=$(echo -n \"${{ secrets.SNOW_WAREHOUSE }}\" | wc -c))"
-          fi
-
-          if [ -z "${{ secrets.SNOW_PRIVATE_KEY_BASE64 }}" ]; then
-            echo "SNOW_PRIVATE_KEY_BASE64 = MISSING"
-          else
-            echo "SNOW_PRIVATE_KEY_BASE64 = PRESENT (len=$(echo -n \"${{ secrets.SNOW_PRIVATE_KEY_BASE64 }}\" | wc -c))"
-          fi
-      # 👆👆👆 END OF DEBUG BLOCK 👆👆👆
-
       - name: Read SQL file (move_data)
         run: |
           SQL_CONTENT="$(tr '\n' ' ' < sql/move_data.sql)"
