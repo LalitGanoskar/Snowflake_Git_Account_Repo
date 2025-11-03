@@ -29,6 +29,12 @@ jobs:
 
       - name: Read SQL file (move_data)
         run: |
+          # Ensure path is exactly sql/move_data.sql (case-sensitive)
+          if [ ! -f sql/move_data.sql ]; then
+            echo "ERROR: sql/move_data.sql not found in repo"
+            ls -la
+            exit 2
+          fi
           SQL_CONTENT="$(tr '\n' ' ' < sql/move_data.sql)"
           echo "$SQL_CONTENT" > sql_encoded.txt
 
@@ -39,25 +45,58 @@ jobs:
           SNOW_DATABASE: ${{ secrets.SNOW_DATABASE }}
           SNOW_SCHEMA: ${{ secrets.SNOW_SCHEMA }}
           SNOW_WAREHOUSE: ${{ secrets.SNOW_WAREHOUSE }}
+          SNOW_PUBKEY_FP: ${{ secrets.SNOW_PUBKEY_FP }}
+          SNOWFLAKE_PUBKEY_FP: ${{ secrets.SNOWFLAKE_PUBKEY_FP }}
         run: |
           node <<'EOF'
           const fs = require('fs');
           const jwt = require('jsonwebtoken');
           const fetch = require('node-fetch');
 
-          const account = process.env.SNOW_ACCOUNT;
-          const user = process.env.SNOW_USER;
+          // read env (allow either SNOW_PUBKEY_FP or SNOWFLAKE_PUBKEY_FP)
+          let account = (process.env.SNOW_ACCOUNT || '').toString().trim().toUpperCase();
+          let user = (process.env.SNOW_USER || '').toString().trim().toUpperCase();
+          let pubFp = (process.env.SNOW_PUBKEY_FP || '').toString().trim();
+          if (!pubFp) pubFp = (process.env.SNOWFLAKE_PUBKEY_FP || '').toString().trim();
+
+          if (!account || !user || !pubFp) {
+            console.error('Missing required env: SNOW_ACCOUNT, SNOW_USER or public key fingerprint (SNOW_PUBKEY_FP or SNOWFLAKE_PUBKEY_FP).');
+            console.error('SNOW_ACCOUNT:', !!process.env.SNOW_ACCOUNT);
+            console.error('SNOW_USER:', !!process.env.SNOW_USER);
+            console.error('SNOW_PUBKEY_FP present:', !!process.env.SNOW_PUBKEY_FP);
+            console.error('SNOWFLAKE_PUBKEY_FP present:', !!process.env.SNOWFLAKE_PUBKEY_FP);
+            process.exit(10);
+          }
+
+          // Remove region part from account if present (everything after first dot)
+          if (account.indexOf('.') !== -1) {
+            account = account.split('.')[0];
+          }
+
+          // Build qualified username and issuer per Snowflake docs
+          const qualified = `${account}.${user}`;                // SUB
+          const iss = `${qualified}.${pubFp}`;                  // ISS (includes SHA256:... fingerprint)
+
           const now = Math.floor(Date.now() / 1000);
           const payload = {
-            iss: account,
-            sub: user,
+            iss: iss,
+            sub: qualified,
             iat: now,
             exp: now + 60,
             aud: `https://${account}.snowflakecomputing.com`
           };
 
+          // Read private key (decoded earlier)
           const key = fs.readFileSync('./rsa_key.p8', 'utf8');
-          const token = jwt.sign(payload, key, { algorithm: 'RS256' });
+
+          // Sign JWT using RS256
+          let token;
+          try {
+            token = jwt.sign(payload, key, { algorithm: 'RS256' });
+          } catch (err) {
+            console.error('JWT sign error:', err && err.message ? err.message : err);
+            process.exit(11);
+          }
 
           const sql = fs.readFileSync('sql_encoded.txt', 'utf8');
           const url = `https://${account}.snowflakecomputing.com/api/v2/statements/`;
@@ -70,14 +109,21 @@ jobs:
           };
 
           (async () => {
-            console.log('Submitting SQL...');
+            console.log('Submitting SQL to', url);
             const r = await fetch(url, {
               method: 'POST',
               headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
               body: JSON.stringify(body)
             });
-            const j = await r.json();
+
             console.log('POST status', r.status);
+            let j;
+            try {
+              j = await r.json();
+            } catch (e) {
+              console.error('Failed to parse JSON response, status:', r.status);
+              process.exit(12);
+            }
             console.log(JSON.stringify(j, null, 2));
 
             if (!j.id) {
@@ -89,11 +135,10 @@ jobs:
             const statusUrl = url + id;
             for (let i = 0; i < 30; i++) {
               await new Promise(r => setTimeout(r, 1000));
-              const s = await fetch(statusUrl, { headers: { 'Authorization': 'Bearer ' + token } });
+              const s = await fetch(statusUrl, { headers: { 'Authorization': 'Bearer ' + token }});
               const sj = await s.json();
               console.log('Poll', i, 'status', s.status);
               console.log(JSON.stringify(sj, null, 2));
-
               if (sj.status && (sj.status.state === 'SUCCESS' || sj.status.state === 'FAILED')) {
                 if (sj.status.state === 'SUCCESS') {
                   console.log('SUCCESS');
@@ -104,7 +149,6 @@ jobs:
                 }
               }
             }
-
             console.error('Timeout waiting for statement');
             process.exit(4);
           })();
