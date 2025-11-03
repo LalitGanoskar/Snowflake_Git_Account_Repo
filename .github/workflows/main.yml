@@ -2,24 +2,49 @@ name: Move Data from Account_Raw to Omega
 
 on:
   schedule:
-    - cron: "*/2 * * * *"  # Runs every 2 minutes
-  workflow_dispatch:     # Allows you to run it manually
+    - cron: "*/2 * * * *"   # Runs every 2 minutes
+  workflow_dispatch:        # Allows manual run as well
 
 jobs:
   move-data:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v3
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
-      - name: Run Snowflake SQL commands
-        uses: Snowflake-Labs/snowflake-actions@v1.2
-        with:
-          SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
-          SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
-          SNOWFLAKE_PASSWORD: ${{ secrets.SNOWFLAKE_PASSWORD }}
-          SNOWFLAKE_WAREHOUSE: ${{ secrets.SNOWFLAKE_WAREHOUSE }}
-          SNOWFLAKE_DATABASE: ${{ secrets.SNOWFLAKE_DATABASE }}
-          SNOWFLAKE_SCHEMA: ${{ secrets.SNOWFLAKE_SCHEMA }}
-          SQL_FILES: "sql/move_data.sql"
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y unzip wget
+
+      - name: Download & install SnowSQL (Linux)
+        id: install_snowsql
+        run: |
+          set -e
+          mkdir -p snowsql_install
+          wget -O snowsql-linux.zip "https://sfc-repo.snowflakecomputing.com/snowsql/bootstrap/py3/bundle/snowsql-linux_x86_64.zip"
+          unzip -q snowsql-linux.zip -d snowsql_install
+          ./snowsql_install/snowsql -v || true
+
+      - name: Run SQL file with snowsql
+        env:
+          SNOW_ACCOUNT: ${{ secrets.SNOW_ACCOUNT }}
+          SNOW_USER: ${{ secrets.SNOW_USER }}
+          SNOW_PWD: ${{ secrets.SNOW_PWD }}
+          SNOW_WAREHOUSE: ${{ secrets.SNOW_WAREHOUSE }}
+          SNOW_DATABASE: ${{ secrets.SNOW_DATABASE }}
+          SNOW_SCHEMA: ${{ secrets.SNOW_SCHEMA }}
+          SQL_FILE: "sql/move_data.sql"
+        run: |
+          set -e
+          echo "Listing repo files:"
+          ls -la
+          echo "Showing SQL file (first 200 lines):"
+          sed -n '1,200p' "$SQL_FILE" || true
+
+          echo "Executing SQL via snowsql..."
+          ./snowsql_install/snowsql -a "$SNOW_ACCOUNT" -u "$SNOW_USER" -p "$SNOW_PWD" \
+            -w "$SNOW_WAREHOUSE" -d "$SNOW_DATABASE" -s "$SNOW_SCHEMA" \
+            -f "$SQL_FILE"
