@@ -19,7 +19,7 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install -y wget bzip2 ca-certificates
 
-           - name: Download & install SnowSQL (verbose + capture logs)
+      - name: Download & install SnowSQL (verbose + capture logs)
         id: install_snowsql
         run: |
           set -euo pipefail
@@ -41,15 +41,10 @@ jobs:
           lsb_release -a || true
           env | sort
 
-          # Run the installer in verbose mode and capture both stdout and stderr
-          # The -b switch does a batch install; -v for verbose if supported.
-          # Redirect stdout+stderr to log file so we can inspect
           echo "Running installer..."
-          # run the installer, allow installer to write into current directory (snowsql_install)
-          # use SNOWSQL_DOWNLOAD_DIR to prefer local installation
           export SNOWSQL_DOWNLOAD_DIR="$(pwd)/snowsql_install"
           echo "SNOWSQL_DOWNLOAD_DIR=$SNOWSQL_DOWNLOAD_DIR" >> "$INSTALL_LOG"
-          # run installer and capture full output
+
           ( set -x; ./"$SNOWSQL_BASH" -b -v ) > >(tee -a "$INSTALL_LOG") 2> >(tee -a "$INSTALL_LOG" >&2) || {
             echo "Installer exited with code $? - see $INSTALL_LOG for details"
             echo "==== INSTALL LOG START ===="
@@ -70,7 +65,6 @@ jobs:
             exit 5
           fi
 
-
       - name: Show SQL file (debug)
         run: |
           echo "Listing repo files:"
@@ -90,7 +84,6 @@ jobs:
         run: |
           set -e
           echo "Executing SQL file via snowsql..."
-          # execute the SQL file using the just-installed snowsql
           ./snowsql_install/snowsql -a "$SNOW_ACCOUNT" -u "$SNOW_USER" -p "$SNOW_PWD" \
             -w "$SNOW_WAREHOUSE" -d "$SNOW_DATABASE" -s "$SNOW_SCHEMA" \
             -f "$SQL_FILE"
