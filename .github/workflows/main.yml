@@ -6,52 +6,41 @@ on:
   workflow_dispatch:
 
 jobs:
-  move-data:
+  run-sql:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
     steps:
-      # Step 1: Checkout repo
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      # Step 2: Set up Node
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      # Step 3: Install dependencies
-      - name: Install dependencies
+      - name: Install node deps
         run: npm install jsonwebtoken node-fetch@2
 
-      # Step 4: Decode private key
-      - name: Decode Snowflake private key
+      - name: Decode private key
         run: |
           echo "${{ secrets.SNOW_PRIVATE_KEY_BASE64 }}" | base64 --decode > ./rsa_key.p8
           chmod 600 ./rsa_key.p8
 
-      # Step 5: Prepare and validate SQL file
       - name: Prepare SQL file and verify contents
         run: |
-          echo "📂 Checking contents of sql/ directory..."
-          ls -R sql || { echo "❌ sql folder missing!"; exit 1; }
-
-          echo "📜 Reading move_data.sql..."
+          echo "📂 Checking SQL file..."
           if [ ! -f "sql/move_data.sql" ]; then
-            echo "❌ File not found: sql/move_data.sql"
+            echo "❌ File not found!"
             exit 2
           fi
 
-          echo "✅ File found. Preparing single-line SQL..."
-          tr '\n' ' ' < sql/move_data.sql > sql_encoded.txt
+          # Remove comments (--) and empty lines, flatten to single line
+          grep -vE '^\s*--|^\s*$' sql/move_data.sql | tr '\n' ' ' > sql_encoded.txt
 
-          echo "🔍 Preview of SQL (first 200 chars):"
+          echo "✅ SQL prepared. Preview (first 200 chars):"
           head -c 200 sql_encoded.txt
-          echo
-          echo "✅ SQL prepared successfully."
 
-      # Step 6: Generate JWT and call Snowflake SQL API
       - name: Generate JWT and call Snowflake SQL API
         env:
           SNOW_ACCOUNT: ${{ secrets.SNOW_ACCOUNT }}
@@ -72,14 +61,12 @@ jobs:
 
           if (!account || !user || !fingerprint) {
             console.error("❌ Missing required environment variables.");
-            console.log("SNOW_ACCOUNT:", !!account);
-            console.log("SNOW_USER:", !!user);
-            console.log("SNOWFLAKE_PUBKEY_FP:", !!fingerprint);
-            process.exit(10);
+            process.exit(1);
           }
 
           const key = fs.readFileSync('./rsa_key.p8', 'utf8');
           const now = Math.floor(Date.now() / 1000);
+
           const payload = {
             iss: `${account}.${user}.${fingerprint}`,
             sub: `${account}.${user}`,
@@ -89,8 +76,8 @@ jobs:
           };
 
           const token = jwt.sign(payload, key, { algorithm: 'RS256' });
-          const sql = fs.readFileSync('sql_encoded.txt', 'utf8').trim();
 
+          const sql = fs.readFileSync('sql_encoded.txt', 'utf8').trim();
           if (!sql) {
             console.error("❌ SQL file is empty!");
             process.exit(2);
@@ -109,7 +96,7 @@ jobs:
             const res = await fetch(url, {
               method: 'POST',
               headers: {
-                'Authorization': 'Bearer ' + token,
+                'Authorization': `Bearer ${token}`,
                 'Content-Type': 'application/json'
               },
               body: JSON.stringify(body)
