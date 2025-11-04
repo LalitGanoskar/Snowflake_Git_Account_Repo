@@ -27,19 +27,26 @@ jobs:
           echo "${{ secrets.SNOW_PRIVATE_KEY_BASE64 }}" | base64 --decode > ./rsa_key.p8
           chmod 600 ./rsa_key.p8
 
-      - name: Prepare SQL file and verify contents
+      - name: Prepare SQL file and verify contents (uses sql/move_data.sql)
         run: |
-          echo "📂 Checking SQL file..."
+          echo "📂 Checking sql/ directory..."
+          ls -la sql || { echo "❌ sql folder missing!"; exit 1; }
+
+          echo "📜 Looking for sql/move_data.sql..."
           if [ ! -f "sql/move_data.sql" ]; then
-            echo "❌ File not found!"
+            echo "❌ File not found: sql/move_data.sql"
             exit 2
           fi
 
-          # Remove comments (--) and empty lines, flatten to single line
+          echo "✅ Found sql/move_data.sql — removing comments and blank lines, flattening..."
+          # Remove lines that start with -- (comments) or blank lines, then flatten to one line
           grep -vE '^\s*--|^\s*$' sql/move_data.sql | tr '\n' ' ' > sql_encoded.txt
 
-          echo "✅ SQL prepared. Preview (first 200 chars):"
-          head -c 200 sql_encoded.txt
+          echo "🔍 Preview (first 300 chars):"
+          head -c 300 sql_encoded.txt || true
+          echo
+          echo "File size (bytes):"
+          wc -c sql_encoded.txt
 
       - name: Generate JWT and call Snowflake SQL API
         env:
@@ -55,32 +62,49 @@ jobs:
           const jwt = require('jsonwebtoken');
           const fetch = require('node-fetch');
 
-          const account = process.env.SNOW_ACCOUNT;
-          const user = process.env.SNOW_USER;
-          const fingerprint = process.env.SNOWFLAKE_PUBKEY_FP;
+          const accountRaw = (process.env.SNOW_ACCOUNT || '').toString().trim();
+          const userRaw = (process.env.SNOW_USER || '').toString().trim();
+          const pubFp = (process.env.SNOWFLAKE_PUBKEY_FP || '').toString().trim();
 
-          if (!account || !user || !fingerprint) {
-            console.error("❌ Missing required environment variables.");
-            process.exit(1);
+          if (!accountRaw || !userRaw || !pubFp) {
+            console.error("❌ Missing required env: SNOW_ACCOUNT / SNOW_USER / SNOWFLAKE_PUBKEY_FP");
+            console.error("SNOW_ACCOUNT present:", !!process.env.SNOW_ACCOUNT);
+            console.error("SNOW_USER present:", !!process.env.SNOW_USER);
+            console.error("SNOWFLAKE_PUBKEY_FP present:", !!process.env.SNOWFLAKE_PUBKEY_FP);
+            process.exit(10);
           }
+
+          // account for JWT must be uppercase and without region suffix for iss/sub (per Snowflake)
+          const account = accountRaw.toUpperCase().split('.')[0];
+          const user = userRaw.toUpperCase();
 
           const key = fs.readFileSync('./rsa_key.p8', 'utf8');
           const now = Math.floor(Date.now() / 1000);
 
+          const qualified = `${account}.${user}`; // SUB
+          const iss = `${qualified}.${pubFp}`;    // ISS includes fingerprint (e.g. SHA256:...)
+
           const payload = {
-            iss: `${account}.${user}.${fingerprint}`,
-            sub: `${account}.${user}`,
+            iss: iss,
+            sub: qualified,
             iat: now,
             exp: now + 60,
             aud: `https://${account}.snowflakecomputing.com`
           };
 
-          const token = jwt.sign(payload, key, { algorithm: 'RS256' });
+          let token;
+          try {
+            token = jwt.sign(payload, key, { algorithm: 'RS256' });
+          } catch (e) {
+            console.error('JWT sign failed:', e && e.message ? e.message : e);
+            process.exit(11);
+          }
 
           const sql = fs.readFileSync('sql_encoded.txt', 'utf8').trim();
+          console.log('Prepared SQL length:', sql.length);
           if (!sql) {
-            console.error("❌ SQL file is empty!");
-            process.exit(2);
+            console.error('❌ SQL is empty after cleaning — aborting.');
+            process.exit(5);
           }
 
           const url = `https://${account}.snowflakecomputing.com/api/v2/statements`;
@@ -92,25 +116,29 @@ jobs:
           };
 
           (async () => {
-            console.log("🚀 Submitting SQL to Snowflake...");
+            console.log('🚀 Submitting SQL to', url);
             const res = await fetch(url, {
               method: 'POST',
               headers: {
-                'Authorization': `Bearer ${token}`,
+                'Authorization': 'Bearer ' + token,
                 'Content-Type': 'application/json'
               },
               body: JSON.stringify(body)
             });
 
             const data = await res.json();
-            console.log("Response status:", res.status);
+            console.log('Response status:', res.status);
             console.log(JSON.stringify(data, null, 2));
 
-            if (!data.id) {
-              console.error("❌ No statement ID returned!");
+            // Snowflake returns statementHandle on success
+            if (!data.statementHandle) {
+              console.error('❌ No statementHandle returned; full response above.');
               process.exit(3);
             }
 
-            console.log("✅ SQL executed successfully!");
+            // show useful stats if present
+            const inserted = (data.stats && data.stats.numRowsInserted) ? data.stats.numRowsInserted : 0;
+            const updated = (data.stats && data.stats.numRowsUpdated) ? data.stats.numRowsUpdated : 0;
+            console.log(`✅ Statement executed. inserted=${inserted} updated=${updated}`);
           })();
           EOF
