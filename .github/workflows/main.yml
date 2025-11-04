@@ -1,40 +1,54 @@
 name: Move Data from Account_Raw to Omega
 
 on:
+  schedule:
+    - cron: "*/2 * * * *"   # every 2 minutes
   workflow_dispatch:
 
 jobs:
-  move_data:
+  run-sql:
     runs-on: ubuntu-latest
-
-    env:
-      SNOW_ACCOUNT: your_account_name   # e.g. abcd-xy12345
-      SNOW_USER: your_snowflake_user
-      SNOW_DATABASE: SNOW_GIT_DB
-      SNOW_SCHEMA: SNOW_GIT_SCHEMA
-      SNOW_WAREHOUSE: COMPUTE_WH
-      SNOWFLAKE_PUBKEY_FP: your_public_key_fingerprint
+    timeout-minutes: 15
 
     steps:
-      - name: 📥 Checkout repository
+      - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: 🧩 Setup Node.js
+      - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: '20'
 
-      - name: 🔍 Check SQL file
+      - name: Install node deps
+        run: npm install jsonwebtoken node-fetch@2
+
+      - name: Decode private key
+        run: |
+          echo "${{ secrets.SNOW_PRIVATE_KEY_BASE64 }}" | base64 --decode > ./rsa_key.p8
+          chmod 600 ./rsa_key.p8
+
+      - name: Prepare SQL file and verify contents
         run: |
           echo "📂 Checking SQL file..."
-          if [ ! -f move_data.sql ]; then
-            echo "❌ move_data.sql not found!"
-            exit 1
+          if [ ! -f "sql/move_data.sql" ]; then
+            echo "❌ File not found!"
+            exit 2
           fi
-          echo "✅ SQL prepared. Preview (first 200 chars):"
-          head -c 200 move_data.sql
 
-      - name: 🚀 Run SQL in Snowflake
+          # Remove comments (--) and empty lines, flatten to single line
+          grep -vE '^\s*--|^\s*$' sql/move_data.sql | tr '\n' ' ' > sql_encoded.txt
+
+          echo "✅ SQL prepared. Preview (first 200 chars):"
+          head -c 200 sql_encoded.txt
+
+      - name: Generate JWT and call Snowflake SQL API
+        env:
+          SNOW_ACCOUNT: ${{ secrets.SNOW_ACCOUNT }}
+          SNOW_USER: ${{ secrets.SNOW_USER }}
+          SNOW_DATABASE: ${{ secrets.SNOW_DATABASE }}
+          SNOW_SCHEMA: ${{ secrets.SNOW_SCHEMA }}
+          SNOW_WAREHOUSE: ${{ secrets.SNOW_WAREHOUSE }}
+          SNOWFLAKE_PUBKEY_FP: ${{ secrets.SNOWFLAKE_PUBKEY_FP }}
         run: |
           node <<'EOF'
           const fs = require('fs');
@@ -44,9 +58,6 @@ jobs:
           const account = process.env.SNOW_ACCOUNT;
           const user = process.env.SNOW_USER;
           const fingerprint = process.env.SNOWFLAKE_PUBKEY_FP;
-          const database = process.env.SNOW_DATABASE;
-          const schema = process.env.SNOW_SCHEMA;
-          const warehouse = process.env.SNOW_WAREHOUSE;
 
           if (!account || !user || !fingerprint) {
             console.error("❌ Missing required environment variables.");
@@ -66,7 +77,7 @@ jobs:
 
           const token = jwt.sign(payload, key, { algorithm: 'RS256' });
 
-          const sql = fs.readFileSync('move_data.sql', 'utf8').trim();
+          const sql = fs.readFileSync('sql_encoded.txt', 'utf8').trim();
           if (!sql) {
             console.error("❌ SQL file is empty!");
             process.exit(2);
@@ -75,9 +86,9 @@ jobs:
           const url = `https://${account}.snowflakecomputing.com/api/v2/statements`;
           const body = {
             statement: sql,
-            database,
-            schema,
-            warehouse
+            database: process.env.SNOW_DATABASE,
+            schema: process.env.SNOW_SCHEMA,
+            warehouse: process.env.SNOW_WAREHOUSE
           };
 
           (async () => {
@@ -95,12 +106,11 @@ jobs:
             console.log("Response status:", res.status);
             console.log(JSON.stringify(data, null, 2));
 
-            if (!data.statementHandle) {
-              console.error("❌ No statement handle returned!");
+            if (!data.id) {
+              console.error("❌ No statement ID returned!");
               process.exit(3);
             }
 
             console.log("✅ SQL executed successfully!");
-            console.log(`📊 Rows inserted: ${data.stats?.numRowsInserted || 0}, updated: ${data.stats?.numRowsUpdated || 0}`);
           })();
           EOF
