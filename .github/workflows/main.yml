@@ -42,7 +42,7 @@ jobs:
           # Remove lines that start with -- (comments) or blank lines, then flatten to one line
           grep -vE '^\s*--|^\s*$' sql/move_data.sql | tr '\n' ' ' > sql_encoded.txt
 
-          echo "🔍 Preview (first 300 chars):"
+          echo " Preview (first 300 chars):"
           head -c 300 sql_encoded.txt || true
           echo
           echo "File size (bytes):"
