@@ -29,16 +29,16 @@ jobs:
 
       - name: Prepare SQL file and verify contents (uses sql/move_data.sql)
         run: |
-          echo "📂 Checking sql/ directory..."
-          ls -la sql || { echo "❌ sql folder missing!"; exit 1; }
+          echo " Checking sql/ directory..."
+          ls -la sql || { echo " sql folder missing!"; exit 1; }
 
-          echo "📜 Looking for sql/move_data.sql..."
+          echo " Looking for sql/move_data.sql..."
           if [ ! -f "sql/move_data.sql" ]; then
-            echo "❌ File not found: sql/move_data.sql"
+            echo " File not found: sql/move_data.sql"
             exit 2
           fi
 
-          echo "✅ Found sql/move_data.sql — removing comments and blank lines, flattening..."
+          echo " Found sql/move_data.sql — removing comments and blank lines, flattening..."
           # Remove lines that start with -- (comments) or blank lines, then flatten to one line
           grep -vE '^\s*--|^\s*$' sql/move_data.sql | tr '\n' ' ' > sql_encoded.txt
 
@@ -67,7 +67,7 @@ jobs:
           const pubFp = (process.env.SNOWFLAKE_PUBKEY_FP || '').toString().trim();
 
           if (!accountRaw || !userRaw || !pubFp) {
-            console.error("❌ Missing required env: SNOW_ACCOUNT / SNOW_USER / SNOWFLAKE_PUBKEY_FP");
+            console.error(" Missing required env: SNOW_ACCOUNT / SNOW_USER / SNOWFLAKE_PUBKEY_FP");
             console.error("SNOW_ACCOUNT present:", !!process.env.SNOW_ACCOUNT);
             console.error("SNOW_USER present:", !!process.env.SNOW_USER);
             console.error("SNOWFLAKE_PUBKEY_FP present:", !!process.env.SNOWFLAKE_PUBKEY_FP);
@@ -103,7 +103,7 @@ jobs:
           const sql = fs.readFileSync('sql_encoded.txt', 'utf8').trim();
           console.log('Prepared SQL length:', sql.length);
           if (!sql) {
-            console.error('❌ SQL is empty after cleaning — aborting.');
+            console.error(' SQL is empty after cleaning — aborting.');
             process.exit(5);
           }
 
@@ -116,7 +116,7 @@ jobs:
           };
 
           (async () => {
-            console.log('🚀 Submitting SQL to', url);
+            console.log(' Submitting SQL to', url);
             const res = await fetch(url, {
               method: 'POST',
               headers: {
@@ -132,13 +132,13 @@ jobs:
 
             // Snowflake returns statementHandle on success
             if (!data.statementHandle) {
-              console.error('❌ No statementHandle returned; full response above.');
+              console.error(' No statementHandle returned; full response above.');
               process.exit(3);
             }
 
             // show useful stats if present
             const inserted = (data.stats && data.stats.numRowsInserted) ? data.stats.numRowsInserted : 0;
             const updated = (data.stats && data.stats.numRowsUpdated) ? data.stats.numRowsUpdated : 0;
-            console.log(`✅ Statement executed. inserted=${inserted} updated=${updated}`);
+            console.log(` Statement executed. inserted=${inserted} updated=${updated}`);
           })();
           EOF
