@@ -27,20 +27,20 @@ jobs:
           echo "${{ secrets.SNOW_PRIVATE_KEY_BASE64 }}" | base64 --decode > ./rsa_key.p8
           chmod 600 ./rsa_key.p8
 
-      - name: Prepare SQL file and verify contents (uses sql/Task.sql.sql)
+      - name: Prepare SQL file and verify contents (uses sql/Task.sql)
         run: |
           echo " Checking sql/ directory..."
           ls -la sql || { echo " sql folder missing!"; exit 1; }
 
-          echo " Looking for sql/Task.sql.sql..."
-          if [ ! -f "sql/Task.sql.sql" ]; then
-            echo " File not found: sql/Task.sql.sql"
+          echo " Looking for sql/Task.sql..."
+          if [ ! -f "sql/Task.sql" ]; then
+            echo " File not found: sql/Task.sql"
             exit 2
           fi
 
-          echo " Found sql/Task.sql.sql — removing comments and blank lines, flattening..."
+          echo " Found sql/Task.sql — removing comments and blank lines, flattening..."
           # Remove lines that start with -- (comments) or blank lines, then flatten to one line
-          grep -vE '^\s*--|^\s*$' sql/Task.sql.sql | tr '\n' ' ' > sql_encoded.txt
+          grep -vE '^\s*--|^\s*$' sql/Task.sql | tr '\n' ' ' > sql_encoded.txt
 
           echo " Preview (first 300 chars):"
           head -c 300 sql_encoded.txt || true
